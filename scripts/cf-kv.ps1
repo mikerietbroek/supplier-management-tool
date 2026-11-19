@@ -31,7 +31,8 @@ if ($Action -eq "init") {
 }
 
 if (-not $ns) { throw "Namespace $Title bestaat nog niet; draai eerst: .\scripts\cf-kv.ps1 init" }
-$bytes = [IO.File]::ReadAllBytes((Resolve-Path $File))
-$r = Invoke-RestMethod "$api/accounts/$accId/storage/kv/namespaces/$($ns.id)/values/snapshot" -Method Put -Headers $H -ContentType "application/json" -Body $bytes
+# -InFile i.p.v. [IO.File]: werkt ook in PowerShell constrained language mode
+$path = (Resolve-Path $File).Path
+$r = Invoke-RestMethod "$api/accounts/$accId/storage/kv/namespaces/$($ns.id)/values/snapshot" -Method Put -Headers $H -ContentType "application/json" -InFile $path
 if (-not $r.success) { throw ($r.errors | ConvertTo-Json) }
-Write-Host ("Snapshot geupload: {0:N0} bytes" -f $bytes.Length)
+Write-Host ("Snapshot geupload: {0:N0} bytes" -f (Get-Item $path).Length)
