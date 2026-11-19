@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+.dev.vars
+# Snapshot bevat clubs en namen van managers: nooit in git
+data/

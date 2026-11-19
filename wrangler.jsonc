@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "supplier-management-tool",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "kv_namespaces": [
+    // Aangemaakt met: .\scripts\cf-kv.ps1 init
+    { "binding": "SNAPSHOT", "id": "10b5370648334ff6a382800b35f36fae" }
+  ],
+  "vars": {
+    // Na het aanzetten van Cloudflare Access invullen (zie README)
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  },
+  "observability": { "enabled": true }
+}

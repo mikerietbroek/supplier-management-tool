@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Supplier Management Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="boot" class="boot">Gegevens laden…</div>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Supplier Management Tool</h1>
+      <div class="sub" id="stamp"></div>
+    </div>
+    <span class="proto">Prototype: alleen lezen, acties worden niet uitgevoerd</span>
+  </header>
+  <nav class="tabs" aria-label="Weergave">
+    <a href="#clubs" data-v="clubs">Clubs</a>
+    <a href="#bulk" data-v="bulk">Bulk wijzigen</a>
+    <a href="#leveranciers" data-v="leveranciers">Leveranciers</a>
+    <a href="#catalogus" data-v="catalogus">Catalogus per land</a>
+  </nav>
+
+  <section class="view" id="v-clubs">
+    <div class="split">
+      <div class="side">
+        <div class="ctrl">
+          <input type="search" id="cq" placeholder="Zoek kostenplaats of naam" aria-label="Zoek club">
+          <select id="cl" aria-label="Land"><option value="">Alle landen</option></select>
+        </div>
+        <div class="ctrl">
+          <select id="cf" aria-label="Filter">
+            <option value="">Alle clubs</option>
+            <option value="reno">Alleen renovatie</option>
+            <option value="dup">Met dubbele leverancier</option>
+            <option value="prog">Status In Progress / Closed</option>
+          </select>
+        </div>
+        <div class="ctrl" id="cregio"></div>
+        <div class="list" id="clist" role="listbox" aria-label="Clubs"></div>
+        <div class="note" id="ccount"></div>
+      </div>
+      <div class="detail" id="cdetail"></div>
+    </div>
+  </section>
+
+  <section class="view" id="v-bulk" hidden>
+    <div class="detail">
+      <div class="dhead"><h2>Bulk wijzigen</h2><span class="note">Meerdere clubs, meerdere diensten en instances, in één keer naar een andere leverancier.</span></div>
+      <div class="steps">
+        <div class="step">
+          <h3><span class="sn">1</span>Clubs kiezen</h3>
+          <div class="ctrl">
+            <select id="bl" aria-label="Land"><option value="">Alle landen</option></select>
+            <select id="bst" aria-label="Status">
+              <option value="act">Actieve clubs</option><option value="">Alle clubs</option>
+            </select>
+          </div>
+          <div class="ctrl" id="bregio"></div>
+          <details class="paste"><summary class="note">Of plak een lijst kostenplaatsen</summary>
+            <textarea id="bpaste" rows="3" placeholder="Bijv. 5019, 5021, 5023 of één per regel" aria-label="Lijst kostenplaatsen"></textarea>
+            <div class="note" id="bpastemsg"></div></details>
+          <div class="ctrl"><button class="btn" id="ball">Alles selecteren</button><button class="btn" id="bnone">Niets</button><span class="note" id="bcount"></span></div>
+          <div class="list chk" id="bclubs" aria-label="Clubs voor bulk"></div>
+        </div>
+        <div class="step">
+          <h3><span class="sn">2</span>Diensten en instances</h3>
+          <div class="ctrl"><input type="search" id="bsq" placeholder="Filter dienst" aria-label="Filter dienst"></div>
+          <div class="list chk" id="bsvcs" aria-label="Diensten"></div>
+          <div class="note">Vink een dienst aan voor alle instances, of klap hem open om alleen bepaalde instances te kiezen.</div>
+        </div>
+        <div class="step">
+          <h3><span class="sn">3</span>Actie en leverancier</h3>
+          <div class="ctrl">
+            <select id="bmode" aria-label="Actie">
+              <option value="move">Verhuizen naar leverancier (huidige koppelingen eraf)</option>
+              <option value="add">Alleen toevoegen bij leverancier</option>
+              <option value="del">Alleen verwijderen bij huidige leverancier</option>
+            </select>
+          </div>
+          <div id="btargets"></div>
+        </div>
+      </div>
+      <div class="step wide">
+        <h3><span class="sn">4</span>Voorbeeld</h3>
+        <div class="kpis" id="bsum"></div>
+        <div id="bwarn"></div>
+        <div class="tbl"><table id="bprev"></table></div>
+        <details><summary class="note">Toon alle Xurrent-calls</summary><pre class="calls" id="bcalls"></pre></details>
+        <div class="acts"><button class="btn primary" id="bgo">Uitvoeren</button><button class="btn" id="bcopy">Kopieer calls</button><span class="note" id="bmsg" role="status"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="v-leveranciers" hidden>
+    <div class="split">
+      <div class="side">
+        <div class="ctrl"><input type="search" id="aq" placeholder="Zoek leverancier of account" aria-label="Zoek leverancier"></div>
+        <div class="list" id="alist" aria-label="Leveranciers"></div>
+      </div>
+      <div class="detail" id="adetail"></div>
+    </div>
+  </section>
+
+  <section class="view" id="v-catalogus" hidden>
+    <div class="detail">
+      <div class="dhead"><h2>Catalogus per land</h2></div>
+      <div class="note">Percentage actieve clubs (status niet In Progress/Closed) dat de dienst ziet via een standaard-SLA. Diensten onder 85% vallen buiten de standaardcatalogus van dat land. Renovatieclubs tellen voor de 9 renovatie-diensten niet mee.</div>
+      <div class="legend"><span class="chip ok">≥ 99%</span><span class="chip warn">85–99%</span><span class="chip bad">&lt; 85% (geen standaard)</span></div>
+      <div class="ctrl"><input type="search" id="sq" placeholder="Filter dienst" aria-label="Filter dienst"></div>
+      <div class="tbl"><table id="cat"></table></div>
+    </div>
+  </section>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
