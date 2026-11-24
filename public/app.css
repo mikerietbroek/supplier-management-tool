@@ -63,6 +63,8 @@ tr.dup td{background:var(--warn-soft)}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .btn.primary:hover{color:var(--accent-ink);filter:brightness(1.08)}
+.btn:disabled,.btn:disabled:hover{opacity:.4;cursor:not-allowed;filter:none;border-color:var(--line);color:inherit}
+.btn.primary:disabled,.btn.primary:disabled:hover{color:var(--accent-ink)}
 .acts{display:flex;gap:6px;flex-wrap:wrap}
 .panel{border:1px solid var(--accent);border-radius:8px;padding:14px;background:var(--accent-soft);display:flex;flex-direction:column;gap:10px}
 .panel h3{margin:0;font-family:var(--f-display);font-size:16px}

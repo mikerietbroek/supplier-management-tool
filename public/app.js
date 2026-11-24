@@ -103,7 +103,9 @@ function renderClub(){
         ${i===0?`<td rowspan="${byAcc.size}"><b>${esc(svcName(r.svc))}</b>${r.dup?' <span class="chip warn">Dubbel</span>':""}${RENO.has(svcName(r.svc).toLowerCase())?' <span class="chip reno">renovatie-dienst</span>':""}</td>`:""}
         <td><span class="acc">${esc(accName(a))}</span><span class="accid">${esc(accId(a))}</span></td>
         <td>${ks.map(k => { const s = D.slas[k]; return `<span class="sla"><span class="id">${s[0]}</span>${esc(s[4])}${s[6]!=="std"?` <span class="chip">${KIND[s[6]]}</span>`:""}${s[5]==="org"?' <span class="chip" title="Gedekt via land- of club-organisatie, niet per site">org</span>':""}</span>`; }).join("")}</td>
-        <td><div class="acts"><button class="btn" data-act="move" data-s="${r.svc}" data-a="${a}">Verhuizen</button><button class="btn" data-act="del" data-s="${r.svc}" data-a="${a}">Verwijderen</button></div></td></tr>`).join("");
+        <td>${ks.some(k => D.slas[k][5]==="sites")
+          ? `<div class="acts"><button class="btn" data-act="move" data-s="${r.svc}" data-a="${a}">Verhuizen</button><button class="btn" data-act="del" data-s="${r.svc}" data-a="${a}">Verwijderen</button></div>`
+          : `<span class="note" title="Deze SLA's dekken via een land- of club-organisatie, niet per site. Aanpassen kan alleen in Xurrent zelf.">Dekking via organisatie</span>`}</td></tr>`).join("");
     }).join("")}</tbody></table></div>
     <div class="acts"><button class="btn" data-act="add">Dienst toevoegen</button></div>`;
 }
@@ -176,7 +178,10 @@ function showPanel(opts){
     <div class="acts"><button class="btn" id="pchk">Controleren</button><button class="btn primary" id="pgo" disabled>Uitvoeren in Xurrent</button><button class="btn" id="pcl">Sluiten</button></div>
     <div class="note" id="pmsg" role="status">Eerst controleren: n8n leest de actuele stand in Xurrent PRD en toont wat er zou veranderen.</div></div>`;
   let ops = [], checked = null;
-  const invalidate = () => { checked = null; $("#pgo").disabled = true; $("#pres").innerHTML = ""; $("#pconfw").innerHTML = confirmHtml(); $("#pmsg").textContent = "Eerst controleren."; };
+  const invalidate = () => { checked = null; $("#pgo").disabled = true; $("#pres").innerHTML = ""; $("#pconfw").innerHTML = confirmHtml();
+    const n = opts.ops().length; $("#pchk").disabled = !n;
+    $("#pmsg").textContent = n ? "Eerst controleren: n8n leest de actuele stand in Xurrent PRD en toont wat er zou veranderen."
+                               : "Hier valt via de tool niets te wijzigen (zie de melding hierboven)."; };
   $("#pcl").onclick = () => $("#cpanel").innerHTML = "";
   $("#pchk").onclick = async () => {
     ops = opts.ops(); if (!ops.length){ $("#pmsg").textContent = "Geen wijzigingen voor deze keuze."; return; }
@@ -209,7 +214,7 @@ function showPanel(opts){
     } catch (e) { $("#pmsg").textContent = "Uitvoeren mislukt: " + e.message + " Controleer opnieuw voordat je het nog eens probeert."; checked = null; $("#pchk").disabled = false; }
   };
   if (opts.after) opts.after(invalidate);
-  $("#pconfw").innerHTML = confirmHtml();
+  invalidate();
   $("#cpanel").scrollIntoView({block:"nearest"});
 }
 function delPanel(c, svc, a, ks){
