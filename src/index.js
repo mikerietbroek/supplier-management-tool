@@ -20,6 +20,17 @@ async function accessUser(request, env) {
   }
 }
 
+// Tijd in hetzelfde formaat als snapshot.date ("YYYY-MM-DD HH:MM", Europe/Amsterdam)
+const amsNow = () => new Date().toLocaleString("sv-SE", { timeZone: "Europe/Amsterdam" }).slice(0, 16);
+
+// Geslaagde tool-wijzigingen bewaren in KV "changes" zodat de frontend ze over de snapshot heen legt
+// tot de nachtelijke snapshot ze bevat. Ouder dan 3 dagen wordt opgeruimd.
+async function saveChanges(env, add) {
+  const cutoff = new Date(Date.now() - 3 * 864e5).toLocaleString("sv-SE", { timeZone: "Europe/Amsterdam" }).slice(0, 16);
+  const cur = ((await env.SNAPSHOT.get("changes", "json")) || []).filter(c => c.ts >= cutoff);
+  await env.SNAPSHOT.put("changes", JSON.stringify([...cur, ...add]));
+}
+
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
@@ -55,7 +66,17 @@ export default {
         body: JSON.stringify({ mode: body.mode, user: user.email, ops: clean }),
       });
       const text = await r.text();
+      if (body.mode === "execute" && r.ok) {
+        try {
+          const ok = JSON.parse(text).filter(x => x.result === "ok").map(x => ({ club: x.club, sla: x.sla, op: x.op, ts: amsNow() }));
+          if (ok.length) await saveChanges(env, ok);
+        } catch (e) { console.log("changes bijwerken mislukt", e); }
+      }
       return new Response(text, { status: r.status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+    }
+
+    if (url.pathname === "/api/changes" && request.method === "GET") {
+      return json((await env.SNAPSHOT.get("changes", "json")) || []);
     }
 
     return json({ error: "Onbekend endpoint" }, 404);

@@ -5,9 +5,17 @@ async function loadData() {
   if (!r.ok) throw new Error(`Data laden mislukt (${r.status}): ${await r.text()}`);
   return r.json();
 }
+// Wijzigingen via de tool sinds de snapshot (Worker houdt ze bij in KV "changes"); ouder dan de snapshot = al verwerkt
+async function loadChanges() {
+  try {
+    const r = await fetch("/api/changes", { credentials: "same-origin" });
+    return r.ok ? await r.json() : [];
+  } catch { return []; }
+}
 let D;
 try {
   D = await loadData();
+  D.pending = await loadChanges();
 } catch (e) {
   document.getElementById("boot").textContent = e.message;
   throw e;
@@ -45,7 +53,18 @@ function regioFilter(host, landSel, onChange){
   return c => match(c, val(), null);
 }
 const inactive = c => c.status === "In Progress" || c.status === "Closed";
-$("#stamp").textContent = `Stand Xurrent PRD basic-fit-fm, ${D.date} · ${D.clubs.length} clubs · ${D.slas.length} SLA's · ${D.accounts.length} leveranciersaccounts`;
+// openstaande tool-wijzigingen over de snapshot heen leggen
+const slaIdx = new Map(D.slas.map((s, k) => [s[0], k]));
+let nPending = 0;
+for (const ch of (D.pending || [])) {
+  if (!(ch.ts > D.date)) continue;
+  const k = slaIdx.get(ch.sla); if (k === undefined) continue;
+  const cov = (D.cov[ch.club] ??= []);
+  if (ch.op === "add" && !cov.includes(k)) { cov.push(k); nPending++; }
+  if (ch.op === "remove" && cov.includes(k)) { cov.splice(cov.indexOf(k), 1); nPending++; }
+}
+function stamp(){ $("#stamp").textContent = `Stand Xurrent PRD basic-fit-fm, ${D.date}${nPending ? ` + ${nPending} wijziging${nPending>1?"en":""} via de tool` : ""} · ${D.clubs.length} clubs · ${D.slas.length} SLA's · ${D.accounts.length} leveranciersaccounts`; }
+stamp();
 
 // afgeleide structuren
 const slaClubs = D.slas.map(() => []);
@@ -63,7 +82,9 @@ function clubServices(code){
     return {svc, ks, accs, dup: accs.length > 1 && !/yanga/i.test(svcName(svc))};
   }).sort((a,b) => svcName(a.svc).localeCompare(svcName(b.svc)));
 }
-const dupClubs = new Set(Object.keys(D.cov).filter(c => clubServices(c).some(r => r.dup)));
+let dupClubs = new Set();
+const calcDup = () => { dupClubs = new Set(Object.keys(D.cov).filter(c => clubServices(c).some(r => r.dup))); };
+calcDup();
 
 // ---------- Clubs ----------
 const lands = [...new Set(D.clubs.map(c => c[2]))];
@@ -165,6 +186,7 @@ function applyLocal(res, ops){
     if (r.op === "add" && !cov.includes(o.k)){ cov.push(o.k); slaClubs[o.k].push(o.club); n++; }
     if (r.op === "remove" && cov.includes(o.k)){ cov.splice(cov.indexOf(o.k), 1); slaClubs[o.k] = slaClubs[o.k].filter(x => x !== o.club); n++; }
   }
+  if (n){ nPending += n; calcDup(); stamp(); }
   return n;
 }
 // paneel: opts = {title, warns, html, after(invalidate), ops() -> [...], confirmText (verplicht vinkje of null)}
@@ -208,7 +230,7 @@ function showPanel(opts){
       const html = resultTable(res, ops), title = opts.title;
       renderClubList(); renderClub();
       $("#cpanel").innerHTML = `<div class="panel"><h3>Uitgevoerd: ${esc(title)}</h3>${html}
-        <div class="note">${ok} gelukt${bad?`, ${bad} mislukt of geblokkeerd`:""}. Gelogd in n8n. De tabel hieronder is bijgewerkt; de volledige snapshot ververst vannacht.</div>
+        <div class="note">${ok} gelukt${bad?`, ${bad} mislukt of geblokkeerd`:""}. Gelogd in n8n. De tool is bijgewerkt, ook na herladen.</div>
         <div class="acts"><button class="btn" id="pcl2">Sluiten</button></div></div>`;
       $("#pcl2").onclick = () => $("#cpanel").innerHTML = "";
     } catch (e) { $("#pmsg").textContent = "Uitvoeren mislukt: " + e.message + " Controleer opnieuw voordat je het nog eens probeert."; checked = null; $("#pchk").disabled = false; }
