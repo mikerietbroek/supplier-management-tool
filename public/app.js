@@ -113,12 +113,9 @@ $("#cdetail").addEventListener("click", e => {
   if (act === "add") return addPanel(c);
   const svc = +b.dataset.s, a = +b.dataset.a;
   const ks = (D.cov[c.code]||[]).filter(k => D.slas[k][2]===svc && D.slas[k][3]===a);
-  if (act === "del") return showPanel(`Verwijderen: ${svcName(svc)} bij ${accName(a)}`, ks.map(k => delLine(k, c)), checks(c, svc, null));
+  if (act === "del") return delPanel(c, svc, a, ks);
   movePanel(c, svc, a, ks);
 });
-const siteOf = c => `{site ${c.code}}`;
-const delLine = (k, c) => `DELETE /v1/slas/${D.slas[k][0]}/sites/${siteOf(c)}   x-4me-account: ${accId(D.slas[k][3])}   # ${D.slas[k][4]}`;
-const addLine = (k, c) => `POST   /v1/slas/${D.slas[k][0]}/sites/${siteOf(c)}   x-4me-account: ${accId(D.slas[k][3])}   # ${D.slas[k][4]}`;
 // doel-SLA's van leverancier a voor dienst svc in land: SLA's die >=50% van het max aantal clubs in dat land dekken
 function targetSlas(svc, a, land){
   const cand = D.slas.map((s,k) => [s,k]).filter(([s]) => s[2]===svc && s[3]===a && s[6]==="std" && s[5]==="sites")
@@ -131,54 +128,130 @@ function suppliersFor(svc, land){
   D.slas.forEach((s,k) => { if (s[2]===svc && s[6]==="std" && s[5]==="sites"){ const n = slaClubs[k].filter(c => club[c] && club[c].land===land).length; if (n) m.set(s[3], Math.max(m.get(s[3])||0, n)); }});
   return [...m.entries()].sort((x,y) => y[1]-x[1]);
 }
-function checks(c, svc, target){
+const renoSvc = (c, svc) => c.reno && RENO.has(svcName(svc).toLowerCase());
+function checks(c, svc){
   const w = [];
-  if (c.reno && RENO.has(svcName(svc).toLowerCase())) w.push("Renovatieclub: deze dienst hoort leeg te blijven. Bij uitvoeren worden de SLA-ID's in remarks bijgewerkt in plaats van gekoppeld.");
   if (inactive(c)) w.push(`Club heeft status ${c.status}.`);
-  if (target !== null){
-    const other = clubServices(c.code).find(r => r.svc===svc);
-    if (other && other.accs.some(x => x!==target)) w.push("Na deze actie blijft er geen dubbele leverancier over: de huidige koppelingen worden eerst verwijderd.");
-  }
   return w;
+}
+const orgNote = ks => ks.filter(k => D.slas[k][5]==="org").map(k => `SLA ${D.slas[k][0]} (${D.slas[k][4]}) dekt via een organisatie, niet per site: niet via de tool aan te passen.`);
+
+// ---------- Acties via n8n (Worker /api/action) ----------
+async function apiAction(mode, ops){
+  const r = await fetch("/api/action", {method:"POST", credentials:"same-origin", headers:{"content-type":"application/json"},
+    body: JSON.stringify({mode, ops: ops.map(({op, club, sla, account}) => ({op, club, sla, account}))})});
+  const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {}
+  if (!r.ok) throw new Error(j && j.error ? [].concat(j.error).join("; ") : `HTTP ${r.status}: ${t.slice(0, 200)}`);
+  if (!Array.isArray(j)) throw new Error("Onverwacht antwoord van n8n");
+  return j;
+}
+const mkOp = (op, k, c) => ({op, club:c.code, sla:D.slas[k][0], account:accId(D.slas[k][3]), k});
+const PLAN = {add:"toevoegen", remove:"verwijderen", none:"niets te doen", blocked:"geblokkeerd", error:"fout"};
+function resultTable(res, ops){
+  return `<div class="tbl"><table><thead><tr><th>Actie</th><th>SLA</th><th>Leverancier</th><th>Stond erop</th><th>Uitkomst</th></tr></thead><tbody>${res.map(r => {
+    const o = ops[r.idx] || {}; const a = o.k !== undefined ? accName(D.slas[o.k][3]) : r.account;
+    const cls = r.result==="ok" ? "ok" : (r.result==="fout"||r.result==="geblokkeerd") ? "bad" : "";
+    return `<tr><td>${r.op==="add"?"Toevoegen":"Verwijderen"}</td><td><span class="id">${r.sla}</span> ${esc(r.sla_name||"")}</td><td>${esc(a)}</td>
+      <td>${r.before===true?"ja":r.before===false?"nee":"–"}</td>
+      <td><span class="chip ${cls}">${esc(r.result==="voorbeeld" ? PLAN[r.plan] : r.result)}</span> ${esc(r.message||"")}</td></tr>`; }).join("")}</tbody></table></div>`;
+}
+// lokale data bijwerken na geslaagde wijzigingen (snapshot ververst 's nachts)
+function applyLocal(res, ops){
+  let n = 0;
+  for (const r of res){ if (r.result !== "ok") continue; const o = ops[r.idx]; if (!o) continue;
+    const cov = (D.cov[o.club] ??= []);
+    if (r.op === "add" && !cov.includes(o.k)){ cov.push(o.k); slaClubs[o.k].push(o.club); n++; }
+    if (r.op === "remove" && cov.includes(o.k)){ cov.splice(cov.indexOf(o.k), 1); slaClubs[o.k] = slaClubs[o.k].filter(x => x !== o.club); n++; }
+  }
+  return n;
+}
+// paneel: opts = {title, warns, html, after(invalidate), ops() -> [...], confirmText (verplicht vinkje of null)}
+function showPanel(opts){
+  const confirmHtml = () => opts.confirmText && opts.confirmText() ? `<label class="note"><input type="checkbox" id="pconf"> ${esc(opts.confirmText())}</label>` : "";
+  $("#cpanel").innerHTML = `<div class="panel"><h3>${esc(opts.title)}</h3>
+    ${opts.warns && opts.warns.length ? `<div class="note">${opts.warns.map(esc).join("<br>")}</div>` : ""}
+    ${opts.html || ""}
+    <div id="pconfw"></div>
+    <div id="pres"></div>
+    <div class="acts"><button class="btn" id="pchk">Controleren</button><button class="btn primary" id="pgo" disabled>Uitvoeren in Xurrent</button><button class="btn" id="pcl">Sluiten</button></div>
+    <div class="note" id="pmsg" role="status">Eerst controleren: n8n leest de actuele stand in Xurrent PRD en toont wat er zou veranderen.</div></div>`;
+  let ops = [], checked = null;
+  const invalidate = () => { checked = null; $("#pgo").disabled = true; $("#pres").innerHTML = ""; $("#pconfw").innerHTML = confirmHtml(); $("#pmsg").textContent = "Eerst controleren."; };
+  $("#pcl").onclick = () => $("#cpanel").innerHTML = "";
+  $("#pchk").onclick = async () => {
+    ops = opts.ops(); if (!ops.length){ $("#pmsg").textContent = "Geen wijzigingen voor deze keuze."; return; }
+    $("#pchk").disabled = true; $("#pmsg").textContent = "Controleren in Xurrent…";
+    try {
+      checked = await apiAction("preview", ops);
+      $("#pres").innerHTML = resultTable(checked, ops);
+      const todo = checked.filter(r => r.plan==="add" || r.plan==="remove").length;
+      $("#pgo").disabled = !todo;
+      $("#pmsg").textContent = todo ? `${todo} wijziging${todo>1?"en":""} klaar om uit te voeren.` : "Niets uit te voeren.";
+    } catch (e) { $("#pmsg").textContent = "Controle mislukt: " + e.message; }
+    $("#pchk").disabled = false;
+  };
+  $("#pgo").onclick = async () => {
+    if (!checked) return;
+    if ($("#pconf") && !$("#pconf").checked){ $("#pmsg").textContent = "Vink eerst de bevestiging aan."; return; }
+    const todo = checked.filter(r => r.plan==="add" || r.plan==="remove").length;
+    if (!confirm(`${todo} wijziging${todo>1?"en":""} uitvoeren in Xurrent PRD?`)) return;
+    $("#pgo").disabled = $("#pchk").disabled = true; $("#pmsg").textContent = "Uitvoeren…";
+    try {
+      const res = await apiAction("execute", ops);
+      const ok = res.filter(r => r.result==="ok").length, bad = res.filter(r => r.result==="fout"||r.result==="geblokkeerd").length;
+      applyLocal(res, ops);
+      const html = resultTable(res, ops), title = opts.title;
+      renderClubList(); renderClub();
+      $("#cpanel").innerHTML = `<div class="panel"><h3>Uitgevoerd: ${esc(title)}</h3>${html}
+        <div class="note">${ok} gelukt${bad?`, ${bad} mislukt of geblokkeerd`:""}. Gelogd in n8n. De tabel hieronder is bijgewerkt; de volledige snapshot ververst vannacht.</div>
+        <div class="acts"><button class="btn" id="pcl2">Sluiten</button></div></div>`;
+      $("#pcl2").onclick = () => $("#cpanel").innerHTML = "";
+    } catch (e) { $("#pmsg").textContent = "Uitvoeren mislukt: " + e.message + " Controleer opnieuw voordat je het nog eens probeert."; checked = null; $("#pchk").disabled = false; }
+  };
+  if (opts.after) opts.after(invalidate);
+  $("#pconfw").innerHTML = confirmHtml();
+  $("#cpanel").scrollIntoView({block:"nearest"});
+}
+function delPanel(c, svc, a, ks){
+  showPanel({title: `Verwijderen: ${svcName(svc)} bij ${accName(a)} (club ${c.code})`,
+    warns: [...checks(c, svc), ...orgNote(ks)],
+    ops: () => ks.filter(k => D.slas[k][5]==="sites").map(k => mkOp("remove", k, c))});
 }
 function movePanel(c, svc, a, ks){
   const opts = suppliersFor(svc, c.land).filter(([x]) => x!==a);
-  showPanel(`Verhuizen: ${svcName(svc)} van ${accName(a)}`, null, [], `
-    <label class="note" for="mvto">Naar leverancier (met deze dienst in ${LANDN[c.land]}):</label>
-    <select id="mvto">${opts.map(([x,n]) => `<option value="${x}">${esc(accName(x))} · ${n} clubs</option>`).join("")}</select>
-    <pre id="mvpre"></pre>`, () => {
-      const upd = () => { const t = +$("#mvto").value; const tk = targetSlas(svc, t, c.land);
-        $("#mvpre").textContent = [...ks.map(k => delLine(k,c)), ...tk.map(k => addLine(k,c))].join("\n") || "Geen doel-SLA's gevonden"; };
-      if (opts.length){ $("#mvto").addEventListener("input", upd); upd(); } else $("#mvpre").textContent = "Geen andere leverancier met deze dienst in dit land.";
-    });
+  showPanel({title: `Verhuizen: ${svcName(svc)} van ${accName(a)} (club ${c.code})`,
+    warns: [...checks(c, svc), ...orgNote(ks)],
+    html: opts.length ? `<label class="note" for="mvto">Naar leverancier (met deze dienst in ${LANDN[c.land]}):</label>
+      <select id="mvto">${opts.map(([x,n]) => `<option value="${x}">${esc(accName(x))} · ${n} clubs</option>`).join("")}</select>
+      <div class="note">Eerst worden de nieuwe koppelingen toegevoegd, daarna de oude verwijderd.</div>`
+      : `<div class="note">Geen andere leverancier met deze dienst in dit land.</div>`,
+    confirmText: () => renoSvc(c, svc) ? "Renovatieclub: deze dienst hoort leeg te blijven. Ik weet dit en wil toch koppelen." : null,
+    after: inv => { if (opts.length) $("#mvto").addEventListener("input", inv); },
+    ops: () => { if (!opts.length) return []; const t = +$("#mvto").value;
+      const adds = targetSlas(svc, t, c.land).filter(k => !(D.cov[c.code]||[]).includes(k)).map(k => mkOp("add", k, c));
+      const dels = ks.filter(k => D.slas[k][5]==="sites").map(k => mkOp("remove", k, c));
+      return adds.length ? [...adds, ...dels] : []; }});
 }
 function addPanel(c){
   const have = new Set(clubServices(c.code).filter(r => r.accs.length).map(r => r.svc));
   const svcs = D.services.map((n,i) => i).filter(i => !have.has(i) && suppliersFor(i, c.land).length).sort((x,y) => svcName(x).localeCompare(svcName(y)));
-  showPanel(`Dienst toevoegen aan ${c.code}`, null, [], `
-    <div class="ctrl"><select id="adsvc">${svcs.map(i => `<option value="${i}">${esc(svcName(i))}</option>`).join("")}</select><select id="adacc"></select></div>
-    <div id="adw" class="note"></div><pre id="adpre"></pre>`, () => {
-      const fillAcc = () => { const s = +$("#adsvc").value; $("#adacc").innerHTML = suppliersFor(s, c.land).map(([x,n]) => `<option value="${x}">${esc(accName(x))} · ${n} clubs</option>`).join(""); upd(); };
-      const upd = () => { const s = +$("#adsvc").value, a = +$("#adacc").value; $("#adw").textContent = checks(c, s, a).join(" ");
-        $("#adpre").textContent = targetSlas(s, a, c.land).map(k => addLine(k,c)).join("\n"); };
-      if (svcs.length){ $("#adsvc").addEventListener("input", fillAcc); $("#adacc").addEventListener("input", upd); fillAcc(); }
-      else $("#adpre").textContent = "Deze club heeft alle diensten die in dit land bij een leverancier beschikbaar zijn.";
-    });
-}
-function showPanel(title, lines, warns, html, after){
-  $("#cpanel").innerHTML = `<div class="panel"><h3>${esc(title)}</h3>
-    ${warns && warns.length ? `<div class="note">${warns.map(esc).join("<br>")}</div>` : ""}
-    ${html || `<pre>${esc(lines.join("\n"))}</pre>`}
-    <div class="note">Voorbeeld van de Xurrent-calls die de tool zou doen. In de echte versie voert n8n ze uit, controleert het resultaat en schrijft een logregel.</div>
-    <div class="acts"><button class="btn primary" id="pgo">Uitvoeren</button><button class="btn" id="pcl">Sluiten</button></div>
-    <div class="note" id="pmsg" role="status"></div></div>`;
-  $("#pgo").onclick = () => $("#pmsg").textContent = "Niet uitgevoerd: dit prototype leest alleen. In de echte versie gaat deze actie naar n8n.";
-  $("#pcl").onclick = () => $("#cpanel").innerHTML = "";
-  if (after) after();
-  $("#cpanel").scrollIntoView({block:"nearest"});
+  showPanel({title: `Dienst toevoegen aan club ${c.code}`,
+    warns: checks(c, null),
+    html: svcs.length ? `<div class="ctrl"><select id="adsvc">${svcs.map(i => `<option value="${i}">${esc(svcName(i))}</option>`).join("")}</select><select id="adacc"></select></div>
+      <div class="note">Alleen diensten die deze club nog bij geen enkele leverancier heeft (per club en dienst 1 leverancier).</div>`
+      : `<div class="note">Deze club heeft alle diensten die in dit land bij een leverancier beschikbaar zijn.</div>`,
+    confirmText: () => svcs.length && renoSvc(c, +$("#adsvc").value) ? "Renovatieclub: deze dienst hoort leeg te blijven. Ik weet dit en wil toch koppelen." : null,
+    after: inv => { if (!svcs.length) return;
+      const fillAcc = () => { const s = +$("#adsvc").value; $("#adacc").innerHTML = suppliersFor(s, c.land).map(([x,n]) => `<option value="${x}">${esc(accName(x))} · ${n} clubs</option>`).join(""); inv(); };
+      $("#adsvc").addEventListener("input", fillAcc); $("#adacc").addEventListener("input", inv); fillAcc(); },
+    ops: () => { if (!svcs.length) return []; const s = +$("#adsvc").value, a = +$("#adacc").value;
+      return targetSlas(s, a, c.land).map(k => mkOp("add", k, c)); }});
 }
 
-// ---------- Bulk wijzigen ----------
+// ---------- Bulk wijzigen (nog alleen voorbeeld) ----------
+const siteOf = c => `{site ${c.code}}`;
+const delLine = (k, c) => `DELETE /v1/slas/${D.slas[k][0]}/sites/${siteOf(c)}   x-4me-account: ${accId(D.slas[k][3])}   # ${D.slas[k][4]}`;
+const addLine = (k, c) => `POST   /v1/slas/${D.slas[k][0]}/sites/${siteOf(c)}   x-4me-account: ${accId(D.slas[k][3])}   # ${D.slas[k][4]}`;
 const norm = s => String(s).toLowerCase().replace(/\s+for\s+.*$/, "").replace(/\s*-+\s*(uc)?\s*$/, "").replace(/\s+/g, " ").trim();
 lands.forEach(l => $("#bl").insertAdjacentHTML("beforeend", `<option value="${l}">${LANDN[l]||l}</option>`));
 const bSel = new Set(); const bSvc = new Map(); const bTgt = new Map();
@@ -282,7 +355,7 @@ function bPreview(){
   bCallText = calls.join("\n"); $("#bcalls").textContent = bCallText || "Geen calls";
   $("#bmsg").textContent = "";
 }
-$("#bgo").onclick = () => $("#bmsg").textContent = "Niet uitgevoerd: dit prototype leest alleen. In de echte versie gaat deze batch naar n8n, met controle en logregel per koppeling.";
+$("#bgo").onclick = () => $("#bmsg").textContent = "Bulk uitvoeren volgt in een volgende stap. Losse wijzigingen per club kunnen nu al via het tabblad Clubs.";
 $("#bcopy").onclick = () => { navigator.clipboard.writeText(bCallText).then(() => $("#bmsg").textContent = "Calls gekopieerd", () => { const r = document.createRange(); r.selectNodeContents($("#bcalls")); getSelection().removeAllRanges(); getSelection().addRange(r); $("#bmsg").textContent = "Kopiëren lukte niet, de calls zijn geselecteerd: gebruik Ctrl+C"; }); };
 
 // ---------- Leveranciers ----------

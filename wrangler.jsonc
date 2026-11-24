@@ -17,7 +17,9 @@
   "vars": {
     // Uit Worker > Access > Application values
     "ACCESS_TEAM_DOMAIN": "https://old-feather-fcab.cloudflareaccess.com",
-    "ACCESS_AUD": "4c288a524b8d7afe06e653af2bb9f8ba738eee988c07271e1099a41a17e4fab4"
+    "ACCESS_AUD": "4c288a524b8d7afe06e653af2bb9f8ba738eee988c07271e1099a41a17e4fab4",
+    // n8n-flow QU4XzPHOtRBxg6ew "(PRD) Supplier Management Tool - acties"; sleutel staat als secret N8N_ACTION_KEY
+    "N8N_ACTION_URL": "https://n8n-basicfit-e4041d8cfe5c.herokuapp.com/webhook/supplier-management-tool/action"
   },
   "observability": { "enabled": true }
 }
