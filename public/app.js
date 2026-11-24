@@ -275,7 +275,7 @@ function addPanel(c){
       return targetSlas(s, a, c.land).map(k => mkOp("add", k, c)); }});
 }
 
-// ---------- Bulk wijzigen (nog alleen voorbeeld) ----------
+// ---------- Bulk wijzigen ----------
 const siteOf = c => `{site ${c.code}}`;
 const delLine = (k, c) => `DELETE /v1/slas/${D.slas[k][0]}/sites/${siteOf(c)}   x-4me-account: ${accId(D.slas[k][3])}   # ${D.slas[k][4]}`;
 const addLine = (k, c) => `POST   /v1/slas/${D.slas[k][0]}/sites/${siteOf(c)}   x-4me-account: ${accId(D.slas[k][3])}   # ${D.slas[k][4]}`;
@@ -344,8 +344,9 @@ function bTargets(){
 }
 $("#bmode").addEventListener("input", bTargets);
 $("#btargets").addEventListener("input", e => { const s = +e.target.dataset.s; if (!isNaN(s)){ bTgt.set(s, +e.target.value); bPreview(); } });
-let bCallText = "";
+let bCallText = "", bOps = [], bRunning = false;
 function bPreview(){
+  bOps = [];
   const mode = $("#bmode").value; const rows = [], calls = [], warn = new Map(); let nDel = 0, nAdd = 0, nRem = 0;
   const w = (k, c) => { if (!warn.has(k)) warn.set(k, new Set()); warn.get(k).add(c); };
   [...bSel].sort().forEach(code => { const c = club[code];
@@ -355,34 +356,91 @@ function bPreview(){
       const tgt = mode==="del" ? null : bTgt.get(s);
       const cur = (D.cov[code]||[]).filter(k => D.slas[k][2]===s && D.slas[k][6]==="std" && inSel(D.slas[k][4]));
       const dels = mode==="add" ? [] : cur.filter(k => mode==="del" || D.slas[k][3]!==tgt);
-      let adds = [];
+      let adds = [], tk = [];
       const renoBlock = c.reno && RENO.has(svcName(s).toLowerCase());
       if (mode !== "del" && tgt !== undefined && tgt !== null){
-        const tk = targetSlas(s, tgt, c.land).filter(k => inSel(D.slas[k][4]));
+        tk = targetSlas(s, tgt, c.land).filter(k => inSel(D.slas[k][4]));
         if (!tk.length) w(`${accName(tgt)} heeft ${svcName(s)} (gekozen instances) niet in ${LANDN[c.land]}: eerst aanmaken met het update-script`, code);
         adds = tk.filter(k => !(D.cov[code]||[]).includes(k));
       }
-      if (renoBlock && adds.length){ w(`Renovatieclub: ${svcName(s)} wordt niet gekoppeld, SLA-ID's gaan naar remarks`, code); nRem++; }
+      if (renoBlock && adds.length){ w(`Renovatieclub: ${svcName(s)} wordt NIET gekoppeld (renovatie-dienst hoort leeg te blijven)${mode==="move" ? "; oude koppeling blijft staan" : ""}`, code); nRem++; }
+      const orgDels = dels.filter(k => D.slas[k][5] !== "sites");
+      if (orgDels.length) w(`${svcName(s)}: dekking via organisatie, niet via de tool te verwijderen`, code);
+      // eerst toevoegen, dan verwijderen. Verhuizen: oude koppeling alleen weg als de nieuwe er komt of er al is.
+      const willAdd = !renoBlock && adds.length > 0;
+      const covered = tk.length > 0 && tk.every(k => (D.cov[code]||[]).includes(k));
+      if (willAdd) adds.forEach(k => bOps.push(mkOp("add", k, c)));
+      if (mode === "del" || (mode === "move" && (willAdd || covered))) dels.filter(k => D.slas[k][5] === "sites").forEach(k => bOps.push(mkOp("remove", k, c)));
       if (!dels.length && !adds.length) return;
       dels.forEach(k => calls.push(delLine(k, c)));
       if (!renoBlock) adds.forEach(k => calls.push(addLine(k, c)));
-      if (renoBlock && adds.length) calls.push(`PATCH  /v1/sites/${siteOf(c)}   x-4me-account: basic-fit   # remarks += ${adds.map(k => D.slas[k][0]).join(",")}`);
       nDel += dels.length; nAdd += renoBlock ? 0 : adds.length;
       rows.push(`<tr><td><span class="code">${code}</span> ${esc(c.name)}</td><td>${esc(svcName(s))}</td>
         <td>${[...new Set(dels.map(k => accName(D.slas[k][3])))].map(esc).join(", ") || '<span class="note">–</span>'}</td>
         <td>${adds.length ? esc(accName(tgt)) : '<span class="note">–</span>'}</td>
-        <td class="num">−${dels.length} / +${renoBlock ? 0 : adds.length}</td><td>${renoBlock && adds.length ? '<span class="chip reno">remarks</span>' : ""}</td></tr>`);
+        <td class="num">−${dels.length} / +${renoBlock ? 0 : adds.length}</td><td>${renoBlock && adds.length ? '<span class="chip reno">renovatie: overgeslagen</span>' : ""}</td></tr>`);
     });
   });
-  $("#bsum").innerHTML = `<span><b>${bSel.size}</b> clubs</span><span><b>${bSvc.size}</b> diensten</span><span><b>${nDel}</b> koppelingen eraf</span><span><b>${nAdd}</b> erbij</span>${nRem?`<span><b>${nRem}</b> naar remarks</span>`:""}<span><b>${calls.length}</b> Xurrent-calls</span>`;
+  const mins = Math.max(1, Math.round(bOps.length * 4 * 1.6 / 60));
+  $("#bsum").innerHTML = `<span><b>${bOps.length}</b> wijzigingen uit te voeren${bOps.length ? ` (± ${mins} min)` : ""}</span><span><b>${bSel.size}</b> clubs</span><span><b>${bSvc.size}</b> diensten</span><span><b>${bOps.filter(o => o.op==="remove").length}</b> koppelingen eraf</span><span><b>${bOps.filter(o => o.op==="add").length}</b> erbij</span>${nRem?`<span><b>${nRem}</b> renovatie overgeslagen</span>`:""}<span><b>${calls.length}</b> Xurrent-calls</span>`;
   $("#bwarn").innerHTML = warn.size ? `<div class="wlist">${[...warn.entries()].map(([k, cs]) => `<div>${esc(k)} · ${cs.size} club${cs.size>1?"s":""}: ${[...cs].slice(0,25).join(", ")}${cs.size>25?" …":""}</div>`).join("")}</div>` : "";
   $("#bprev").innerHTML = rows.length ? `<thead><tr><th>Club</th><th>Dienst</th><th>Van</th><th>Naar</th><th class="num">Koppelingen</th><th></th></tr></thead><tbody>${rows.slice(0,400).join("")}</tbody>`
     : `<tbody><tr><td class="empty">${bSel.size && bSvc.size ? "Geen wijzigingen: de gekozen clubs staan al zo." : "Kies clubs en diensten om een voorbeeld te zien."}</td></tr></tbody>`;
   if (rows.length > 400) $("#bprev").insertAdjacentHTML("beforeend", `<tbody><tr><td colspan="6" class="note">${rows.length - 400} regels meer, zie alle calls hieronder.</td></tr></tbody>`);
   bCallText = calls.join("\n"); $("#bcalls").textContent = bCallText || "Geen calls";
-  $("#bmsg").textContent = "";
+  if (!bRunning) { $("#bmsg").textContent = bOps.length > 300 ? `${bOps.length} wijzigingen: maximaal 300 per keer, verklein de selectie.` : ""; $("#bgo").disabled = !bOps.length || bOps.length > 300; }
 }
-$("#bgo").onclick = () => $("#bmsg").textContent = "Bulk uitvoeren volgt in een volgende stap. Losse wijzigingen per club kunnen nu al via het tabblad Clubs.";
+// uitvoeren: Worker start n8n-run op de achtergrond; voortgang via polling
+function applyRows(rows){
+  let n = 0;
+  for (const r of rows){ if (r.result !== "ok") continue; const k = slaIdx.get(r.sla); if (k === undefined) continue;
+    const cov = (D.cov[r.club] ??= []);
+    if (r.op === "add" && !cov.includes(k)){ cov.push(k); slaClubs[k].push(r.club); n++; }
+    if (r.op === "remove" && cov.includes(k)){ cov.splice(cov.indexOf(k), 1); slaClubs[k] = slaClubs[k].filter(x => x !== r.club); n++; } }
+  if (n){ nPending += n; calcDup(); stamp(); renderClubList(); if (curClub) renderClub(); }
+  return n;
+}
+function bResults(rows, total, done){
+  const cnt = r => rows.filter(x => x.result === r).length;
+  const bad = rows.filter(x => x.result === "fout" || x.result === "geblokkeerd");
+  $("#bres").innerHTML = `<div class="kpis"><span><b>${rows.length}</b> van ${total} verwerkt</span><span><b>${cnt("ok")}</b> gelukt</span>
+    <span><b>${cnt("niets te doen")}</b> niets te doen</span><span><b>${bad.length}</b> mislukt of geblokkeerd</span></div>
+    ${bad.length ? `<div class="tbl"><table><thead><tr><th>Club</th><th>Actie</th><th>SLA</th><th>Melding</th></tr></thead><tbody>${bad.map(x =>
+      `<tr><td><span class="code">${esc(x.club)}</span></td><td>${x.op==="add"?"Toevoegen":"Verwijderen"}</td><td><span class="id">${x.sla}</span> ${esc(x.sla_name||"")}</td><td><span class="chip bad">${esc(x.result)}</span> ${esc(x.message||"")}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${done ? `<div class="note">Klaar. Alles staat in het n8n-actielog. De tool is bijgewerkt.</div>` : ""}`;
+}
+async function bPoll(run){
+  bRunning = true; $("#bgo").disabled = true; let applied = 0;
+  for (;;){
+    try {
+      const r = await fetch(`/api/bulk/status?run_id=${encodeURIComponent(run.run_id)}`, {credentials:"same-origin"});
+      const j = await r.json();
+      if (r.ok){
+        bResults(j.rows, run.total, j.done);
+        const newOk = j.rows.filter(x => x.result === "ok"); if (newOk.length > applied){ applyRows(newOk); applied = newOk.length; }
+        $("#bmsg").textContent = j.done ? "Bulk-run klaar." : `Bezig: ${j.rows.length} van ${run.total} verwerkt. Je kunt deze pagina open laten; sluiten mag ook, de run loopt door.`;
+        if (j.done) break;
+      } else $("#bmsg").textContent = "Status ophalen mislukt: " + (j.error || r.status) + ". Opnieuw over 15 s.";
+    } catch (e) { $("#bmsg").textContent = "Status ophalen mislukt: " + e.message + ". Opnieuw over 15 s."; }
+    await new Promise(res => setTimeout(res, 15000));
+  }
+  bRunning = false; bPreview();
+}
+$("#bgo").onclick = async () => {
+  if (bRunning || !bOps.length || bOps.length > 300) return;
+  const nA = bOps.filter(o => o.op === "add").length, nR = bOps.length - nA;
+  if (!confirm(`${bOps.length} wijzigingen uitvoeren in Xurrent PRD (${nA} toevoegen, ${nR} verwijderen)?\nDuurt ongeveer ${Math.max(1, Math.round(bOps.length * 4 * 1.6 / 60))} minuten.`)) return;
+  $("#bgo").disabled = true; $("#bmsg").textContent = "Starten…"; $("#bres").innerHTML = "";
+  try {
+    const r = await fetch("/api/bulk", {method:"POST", credentials:"same-origin", headers:{"content-type":"application/json"},
+      body: JSON.stringify({ops: bOps.map(({op, club, sla, account}) => ({op, club, sla, account}))})});
+    const j = await r.json();
+    if (!r.ok) { $("#bmsg").textContent = j.error || `Starten mislukt (HTTP ${r.status})`; $("#bgo").disabled = false; return; }
+    bPoll(j);
+  } catch (e) { $("#bmsg").textContent = "Starten mislukt: " + e.message; $("#bgo").disabled = false; }
+};
+// lopende run oppakken na herladen
+fetch("/api/bulk/current", {credentials:"same-origin"}).then(r => r.ok ? r.json() : null).then(run => { if (run && run.run_id) bPoll(run); }).catch(() => {});
 $("#bcopy").onclick = () => { navigator.clipboard.writeText(bCallText).then(() => $("#bmsg").textContent = "Calls gekopieerd", () => { const r = document.createRange(); r.selectNodeContents($("#bcalls")); getSelection().removeAllRanges(); getSelection().addRange(r); $("#bmsg").textContent = "Kopiëren lukte niet, de calls zijn geselecteerd: gebruik Ctrl+C"; }); };
 
 // ---------- Leveranciers ----------
